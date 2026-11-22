@@ -43,7 +43,9 @@ kind of list, YouTube Music's own mixes too).
   versions, more by its artist).
 - A **playlist** (`/playlist?list=…`, a mix too) is a listing with no content of its own (`content: []`): Localnet shows
   it as its links, each song by its place in it (`1 / (1 + rank / 10)`, with its title, picture and details), then the
-  playlists the page shows under it. What it says of itself is in its details, which Localnet lists in the item's panel:
+  playlists the page shows under it. As a playlist (`playlist: true`), its screen in Localnet is its links read in Read,
+  from its first song, each played in YouTube's player as it is shown and the next read when it ends. What it says of
+  itself is in its details, which Localnet lists in the item's panel:
   its owner (with their page), year, songs, length, views and description. Only the songs the page is served with are
   read; those a long playlist loads as it is scrolled are not.
 - An **artist** (`/channel/UC…`) reads as their name, their top songs in YouTube's player (the list **Show all**

@@ -161,8 +161,10 @@ describe('youtube music', () => {
       microformat: { microformatDataRenderer: { urlCanonical: `${YTM}/playlist?list=${list}` } },
     }))
     const parsed = await parseYouTubeMusic()
-    // No content of its own: Localnet shows it as its links, the songs in the playlist's order.
+    // No content of its own: Localnet shows it as its links, the songs in the playlist's order, read in Read, played in
+    // turn.
     expect(parsed.listing).toBe(true)
+    expect(parsed.playlist).toBe(true)
     expect(parsed.title).toBe('Gorillaz, daft punk, capital cities etc')
     expect(parsed.content).toEqual([])
     expect(parsed.links.map(link => [link.url, link.title, link.score])).toEqual([

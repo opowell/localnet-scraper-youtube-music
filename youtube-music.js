@@ -368,7 +368,8 @@ function ytmSections(data) {
 // with weight 1 to its artists' pages, with 0.5 to each song, and with 0.3 / (1 + rank / 10) to the albums the page
 // shows under it (its other versions, more by its artist).
 // A playlist (/playlist?list=…, a mix too) is a listing with no content of its own: Localnet shows it as its links,
-// each song by its place (1 / (1 + rank / 10)), then the playlists the page shows under it. What it says of itself is
+// each song by its place (1 / (1 + rank / 10)), then the playlists the page shows under it, and, as it is a playlist
+// (playlist: true), reads them in Read, playing each song in turn. What it says of itself is
 // in its details: its owner (with their page), year, songs, length, views and description.
 function ytmCollection(entry, album) {
   const { data, params } = entry
@@ -404,6 +405,8 @@ function ytmCollection(entry, album) {
     const entries = [...songs, ...ytmShelves(others, taken).flatMap(shelf => shelf.entries)]
     return {
       listing: true,
+      // Its songs are played one after another: Localnet reads its links in Read, playing each.
+      playlist: true,
       title,
       content: [],
       links: entries.map((item, rank) => ytmLink(item, 1 / (1 + rank / 10))),
