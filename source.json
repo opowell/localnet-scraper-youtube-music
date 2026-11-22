@@ -1,0 +1,10 @@
+{
+  "scrapers": [
+    {
+      "name": "YouTube Music",
+      "urlPattern": "://music.youtube.com",
+      "searchUrl": "https://music.youtube.com/search?q={term}"
+    }
+  ],
+  "file": "youtube-music.js"
+}
