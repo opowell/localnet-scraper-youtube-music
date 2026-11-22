@@ -11,6 +11,9 @@ afterEach(() => {
 
 const YTM = 'https://music.youtube.com'
 
+// Links by where they lead and how much they weigh, what they say of it (title, picture, details) left to tests of their own.
+const placed = (links: { url: string, score: number }[]) => links.map(({ url, score }) => ({ url, score }))
+
 // A string as YouTube Music writes it between single quotes, every character but letters and digits escaped.
 function escaped(text: string) {
   return text.replace(/[^\w ]/g, c => (c.charCodeAt(0) < 256 ? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}` : `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`))
@@ -101,12 +104,25 @@ describe('youtube music', () => {
       '2. Instant Crush (feat. Julian Casablancas) · Daft Punk & Julian Casablancas · 5:38 · 1.2B plays',
     ])
     expect(parsed.canonicalUrl).toBe(`${YTM}/browse/${ALBUM}`)
-    expect(parsed.links).toEqual([
-      { url: `${YTM}/watch?v=IluRBvnYMoY`, title: 'Give Life Back to Music', score: 0.5 },
-      { url: `${YTM}/watch?v=a5uQMwRMHcs`, title: 'Instant Crush (feat. Julian Casablancas)', score: 0.5 },
+    expect(placed(parsed.links)).toEqual([
+      { url: `${YTM}/watch?v=IluRBvnYMoY`, score: 0.5 },
+      { url: `${YTM}/watch?v=a5uQMwRMHcs`, score: 0.5 },
       { url: `${YTM}/browse/MPREb_eMBjPmWySjR`, score: 0.3 },
       { url: `${YTM}/channel/${DAFT}`, score: 1 },
     ])
+    // A song's link says what the album's list says of it, standing for its page until it is scraped, its picture the
+    // album's cover.
+    expect(parsed.links[1]).toEqual({
+      url: `${YTM}/watch?v=a5uQMwRMHcs`,
+      title: 'Instant Crush (feat. Julian Casablancas)',
+      picture: 'https://yt3.googleusercontent.com/ram=w544-h544',
+      details: [
+        ['by', [{ text: 'Daft Punk', url: `${YTM}/channel/${DAFT}` }, { text: 'Julian Casablancas', url: `${YTM}/channel/UCWhpbdGLnR8XtXLr0yl2nYA` }]],
+        ['length', '5:38'],
+        ['plays', 1200000000],
+      ],
+      score: 0.5,
+    })
     expect(Object.fromEntries(parsed.details)).toMatchObject({
       kind: 'Album',
       artists: [{ text: 'Daft Punk', url: `${YTM}/channel/${DAFT}` }],
@@ -186,8 +202,8 @@ describe('youtube music', () => {
       '## About',
       'A French duo.',
     ])
-    expect(parsed.links).toEqual([
-      { url: `${YTM}/watch?v=khnokW3Mw24`, title: 'Instant Crush', score: 0.5 },
+    expect(placed(parsed.links)).toEqual([
+      { url: `${YTM}/watch?v=khnokW3Mw24`, score: 0.5 },
       { url: `${YTM}/browse/${ALBUM}`, score: 0.3 },
       { url: `${YTM}/browse/MPREb_7ltM34kr0mH`, score: 0.3 / 1.1 },
       { url: `${YTM}/channel/UCjustice`, score: 0.3 / 1.2 },
@@ -195,7 +211,7 @@ describe('youtube music', () => {
     expect(Object.fromEntries(parsed.details)).toEqual({ subscribers: 7220000, views: 6066806347 })
   })
 
-  it('reads a search as a listing of what it found, the top result first, a line each, linking to it', async () => {
+  it('reads a search as a listing of what it found, the top result first, each link saying what the page says of it', async () => {
     const { parseYouTubeMusic } = load('youtube-music.js', ['parseYouTubeMusic'])
     const item = (title: string, endpoint: object, subtitle?: string) => ({ musicResponsiveListItemRenderer: {
       flexColumns: [runs(title), ...(subtitle ? [runs(subtitle)] : [])].map(text => ({ musicResponsiveListItemFlexColumnRenderer: { text } })),
@@ -218,18 +234,18 @@ describe('youtube music', () => {
       `${YTM}/browse/${ALBUM}`,
       `${YTM}/playlist?list=RDCLAK5uy_n20`,
     ])
-    // A title's brackets would end its link, so they are written as parentheses.
-    expect(parsed.content).toEqual([
-      '## Top result',
-      `- [Daft Punk](${YTM}/channel/${DAFT}) · Artist • 65.4M monthly audience`,
-      `- [Instant Crush](${YTM}/watch?v=khnokW3Mw24) · 4:36`,
-      '## More results',
-      `- [Random Access Memories (Deluxe)](${YTM}/browse/${ALBUM}) · Album • Daft Punk • 2013`,
-      `- [Presenting Daft Punk](${YTM}/playlist?list=RDCLAK5uy_n20)`,
-    ])
+    expect(parsed.content).toEqual([])
+    expect(parsed.title).toBe('daft punk - YouTube Music')
+    expect(parsed.links[0]).toEqual({ url: `${YTM}/channel/${DAFT}`, title: 'Daft Punk', details: [['kind', 'Artist'], ['audience', 65400000]], score: 1 })
+    expect(parsed.links[2]).toEqual({
+      url: `${YTM}/browse/${ALBUM}`,
+      title: 'Random Access Memories [Deluxe]',
+      details: [['kind', 'Album'], ['by', ['Daft Punk']], ['year', 2013]],
+      score: 1 / 1.2,
+    })
   })
 
-  it('reads the home page as its shelves, the later ones asked for as the page would, then the user\'s playlists', async () => {
+  it('reads the home page as a listing of its shelves\' entries, the later ones asked for as the page would, then the user\'s playlists', async () => {
     const shelf = (title: string, cards: [string, object, string][], more?: string) => ({
       ...carousel(title, cards.map(([name, endpoint]) => [name, endpoint])),
       ...(more ? {} : {}),
@@ -264,16 +280,9 @@ describe('youtube music', () => {
     // One part more, as the answer names no further one.
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(parsed.listing).toBe(true)
-    expect(parsed.content).toEqual([
-      '## Listen again',
-      `- [Liked Music](${YTM}/playlist?list=LM) · Auto playlist`,
-      `- [Born Gangstaz](${YTM}/browse/MPREb_boss) · Album • Boss`,
-      '## New releases',
-      `- [Discovery](${YTM}/browse/MPREb_7ltM34kr0mH) · Album • Daft Punk`,
-      // The sidebar's playlists, but for one a shelf has shown already.
-      '## Your playlists',
-      `- [Chanukah](${YTM}/playlist?list=PLchanukah)`,
-    ])
+    expect(parsed.content).toEqual([])
+    expect(parsed.links[1]).toEqual({ url: `${YTM}/browse/MPREb_boss`, title: 'Born Gangstaz', details: [['kind', 'Album'], ['by', ['Boss']]], score: 1 / 1.1 })
+    // The sidebar's playlists follow, but for one a shelf has shown already.
     expect(parsed.links.map((link: { url: string }) => link.url)).toEqual([
       `${YTM}/playlist?list=LM`,
       `${YTM}/browse/MPREb_boss`,
@@ -332,8 +341,8 @@ describe('youtube music', () => {
         'Source: Musixmatch',
       ])
       expect(parsed.canonicalUrl).toBe(`${YTM}/watch?v=khnokW3Mw24`)
-      expect(parsed.links).toEqual([
-        { url: `${YTM}/browse/${ALBUM}`, title: 'Random Access Memories', score: 1 },
+      expect(placed(parsed.links)).toEqual([
+        { url: `${YTM}/browse/${ALBUM}`, score: 1 },
         // The songs and albums YouTube Music offers beside it, but for the song's own album, linked already.
         { url: `${YTM}/watch?v=ykYMLQqD2kY`, score: 0.3 },
         { url: `${YTM}/browse/MPREb_7ltM34kr0mH`, score: 0.3 / 1.1 },

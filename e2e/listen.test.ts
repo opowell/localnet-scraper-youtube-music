@@ -21,29 +21,52 @@ function servedPage(path: string, params: object, data: object) {
 }
 
 test.describe('youtube music', () => {
-  test('the home page, at its bare address, is read by this scraper, not YouTube\'s, as a listing of what it shows', async ({ app, site }) => {
-    site.serve(`${YTM}/`, servedPage('/browse', { browseId: 'FEmusic_home' }, {
-      contents: { singleColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicCarouselShelfRenderer: {
-        header: { musicCarouselShelfBasicHeaderRenderer: { title: runs('Listen again') } },
-        contents: [
-          { musicTwoRowItemRenderer: { title: runs(['Random Access Memories', { browseEndpoint: { browseId: 'MPREb_K8qWMWVqXGi' } }]), subtitle: runs('Album • Daft Punk') } },
-          { musicTwoRowItemRenderer: { title: runs(['Instant Crush', { watchEndpoint: { videoId: 'khnokW3Mw24' } }]), subtitle: runs('Song • Daft Punk') } },
-        ],
-      } }] } } } }] } },
-    }))
+  test('the home page, at its bare address, is read by this scraper, not YouTube\'s, as its links alone, each by its title and picture, shown as YouTube shows them', async ({ app, site }) => {
+    const cover = 'https://lh3.googleusercontent.com/ram=w544-h544'
+    const frame = 'https://i.ytimg.com/vi/khnokW3Mw24/sddefault.jpg'
+    const swatch = (color: string, width: number, height: number) => ({
+      headers: { 'Content-Type': 'image/svg+xml' },
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${color}"/></svg>`,
+    })
+    const picture = (url: string, width: number, height: number) => ({ musicThumbnailRenderer: { thumbnail: { thumbnails: [{ url, width, height }] } } })
+    site.serveAll({
+      [`${YTM}/`]: servedPage('/browse', { browseId: 'FEmusic_home' }, {
+        contents: { singleColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicCarouselShelfRenderer: {
+          header: { musicCarouselShelfBasicHeaderRenderer: { title: runs('Listen again') } },
+          contents: [
+            { musicTwoRowItemRenderer: { title: runs(['Random Access Memories', { browseEndpoint: { browseId: 'MPREb_K8qWMWVqXGi' } }]), subtitle: runs('Album', ' • ', ['Daft Punk', DAFT]), thumbnailRenderer: picture(cover, 544, 544) } },
+            { musicTwoRowItemRenderer: { title: runs(['Instant Crush', { watchEndpoint: { videoId: 'khnokW3Mw24' } }]), subtitle: runs('Song', ' • ', ['Daft Punk', DAFT], ' • ', '1.2B plays'), thumbnailRenderer: picture(frame, 640, 360) } },
+          ],
+        } }] } } } }] } },
+      }),
+      [cover]: swatch('#c9a227', 544, 544),
+      [frame]: swatch('#2a9d8f', 640, 360),
+    })
     await app.scrape(YTM)
     const item = await app.get('items', YTM)
-    expect(item.listing).toBe(true)
+    expect(item).toMatchObject({ listing: true, content: [] })
     const logs = await app.all('logs')
     expect(logs.map((entry: any) => entry.message).join('\n')).toContain('(via YouTube Music)')
-    const links = (await app.all('links')).filter((link: any) => link.originKey === YTM).map((link: any) => link.destinationKey)
-    expect(links.sort()).toEqual([ALBUM, SONG])
+    const links = (await app.all('links')).filter((link: any) => link.originKey === YTM)
+    expect(links.map((link: any) => [link.destinationKey, link.title, link.picture])).toEqual([
+      [ALBUM, 'Random Access Memories', cover],
+      [SONG, 'Instant Crush', frame],
+    ])
 
-    // Read shows its shelves, each entry a link to its page, not the page's text (its sidebar).
-    await app.go(`#/?q=${encodeURIComponent(`item="${YTM}"`)}&v=record`)
-    await expect(app.page.locator('.reader .reader-heading')).toHaveText(['Listen again'])
-    await expect(app.page.locator('.reader a', { hasText: 'Random Access Memories' })).toHaveAttribute('href', /MPREb_K8qWMWVqXGi/)
-    await expect(app.page.locator('.reader')).toContainText('Instant Crush · Song • Daft Punk')
+    // Having no content, its screen is its links, by their titles, even asked for in Read.
+    await app.go(`#/library?v=record&q=${encodeURIComponent(`item="${YTM}"`)}`)
+    await expect(app.page).toHaveURL(/[?&]e=l(inks)?&/)
+    await expect(app.page.locator('.dc-shell__main')).toContainText('Random Access Memories')
+    await expect(app.page.getByText(/Linked from here/i)).toHaveCount(0)
+
+    // As YouTube shows them: a card each, its picture, title, by whom, and how often it was played.
+    await app.go(`#/library?e=links&v=youtube&q=${encodeURIComponent(`item="${YTM}"`)}`)
+    const view = app.page.locator('.lnv-youtube')
+    await expect(view.locator('.title')).toHaveText(['Random Access Memories', 'Instant Crush'])
+    await expect(view.locator('.channel')).toHaveText(['Daft Punk', 'Daft Punk'])
+    await expect(view.locator('.stats').last().locator('span')).toHaveText(['Song', '1.2B plays'])
+    await expect(view.locator('.frame').first()).toHaveAttribute('src', cover)
+    await expect.poll(() => view.locator('.frame').first().evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
     if (process.env.SHOT) {
       await app.page.screenshot({ path: process.env.SHOT })
     }

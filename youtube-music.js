@@ -137,6 +137,17 @@ function ytmThumbnail(node) {
   return thumbnails.reduce((a, b) => ((b.width || 0) * (b.height || 0) > (a.width || 0) * (a.height || 0) ? b : a), thumbnails[0])?.url || null
 }
 
+// The picture of an entry (a cover, a video's frame, an artist's photo), as large as YouTube Music serves it: its
+// thumbnails are small (60 or 120 pixels), and its pictures on googleusercontent.com come in any size their address
+// names (=w120-h120), so a small one is asked for at 544.
+function ytmPicture(thumbnail) {
+  const url = ytmThumbnail(thumbnail)
+  if (!url || !/^https:\/\/(?:lh\d|yt\d)\.(?:googleusercontent|ggpht)\.com\//.test(url)) {
+    return url
+  }
+  return url.replace(/=w(\d+)-h(\d+)/, (size, w, h) => (Number(w) < 544 && w === h ? '=w544-h544' : size))
+}
+
 // A number the page writes in short ("7.22M subscribers", "1.2B plays") or in full ("6,066,806,347 views"), null if
 // it writes none.
 function ytmNumber(text) {
@@ -193,6 +204,7 @@ function ytmSong(row) {
     }
   }
   const fixed = (row.fixedColumns || []).map(column => ytmText(column.musicResponsiveListItemFixedColumnRenderer?.text))
+  const entry = ytmEntry('musicResponsiveListItemRenderer', row)
   return {
     title: ytmText(columns[0]),
     url: `${YTM}/watch?v=${id}`,
@@ -201,6 +213,8 @@ function ytmSong(row) {
     album,
     length: fixed.find(text => /^\d+(?::\d\d)+$/.test(text)) || null,
     plays,
+    picture: entry?.picture || null,
+    details: entry?.details || [],
   }
 }
 
@@ -215,49 +229,21 @@ function ytmShelfSongs(shelf) {
   return (shelf?.contents || []).map(entry => entry.musicResponsiveListItemRenderer).filter(Boolean).map(ytmSong).filter(Boolean)
 }
 
-// The pages a tree of data leads to, in page order, each once: the entries of its lists and shelves (a song, an album,
-// an artist, a playlist), each by its title's link or its own, and the top result of a search.
-function ytmEntryUrls(tree) {
-  const urls = []
-  const visit = (node) => {
-    if (Array.isArray(node)) {
-      node.forEach(visit)
-      return
-    }
-    if (!node || typeof node !== 'object') {
-      return
-    }
-    const entry = node.musicResponsiveListItemRenderer || node.musicTwoRowItemRenderer || node.musicCardShelfRenderer
-    if (entry) {
-      const titleRuns = (entry.title || entry.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text)?.runs || []
-      const url = ytmEndpointUrl(titleRuns[0]?.navigationEndpoint) || ytmEndpointUrl(entry.navigationEndpoint)
-        || (entry.playlistItemData?.videoId && `${YTM}/watch?v=${entry.playlistItemData.videoId}`)
-      if (url) {
-        urls.push(url)
-      }
-      // A search's top result holds songs of its own under it.
-      if (node.musicCardShelfRenderer) {
-        visit(entry.contents)
-      }
-      return
-    }
-    Object.values(node).forEach(visit)
+// A link to an entry's page, with its title, picture and details, which stand for the page until it is scraped.
+function ytmLink(entry, score) {
+  return {
+    url: entry.url,
+    title: entry.title,
+    ...(entry.picture ? { picture: entry.picture } : {}),
+    ...(entry.details?.length ? { details: entry.details } : {}),
+    score,
   }
-  visit(tree)
-  return [...new Set(urls)]
 }
 
-// Links to pages, each once and not to those already linked or excluded, weighing less the further down they are,
-// from most: weight / (1 + rank / 10).
-function ytmRanked(urls, weight, taken) {
-  const links = []
-  for (const url of urls) {
-    if (!taken.has(url)) {
-      taken.add(url)
-      links.push({ url, score: weight / (1 + links.length / 10) })
-    }
-  }
-  return links
+// Links to the entries a tree of data shows (see ytmShelves), in page order, each once and none of those taken
+// already, weighing less the further down they are: weight / (1 + rank / 10).
+function ytmLinks(tree, weight, taken) {
+  return ytmShelves(tree, taken).flatMap(shelf => shelf.entries).map((entry, rank) => ytmLink(entry, weight / (1 + rank / 10)))
 }
 
 // The paragraphs of a description, each run of lines between blank lines a block of its own.
@@ -343,7 +329,7 @@ async function ytmTrack(id, list) {
     content,
     links: [
       ...(album ? [{ url: album.url, title: album.text, score: 1 }] : []),
-      ...ytmRanked(ytmEntryUrls(relatedPage?.contents), 0.3, taken),
+      ...ytmLinks(relatedPage?.contents, 0.3, taken),
     ],
   })
   return {
@@ -399,22 +385,23 @@ function ytmCollection(entry, album) {
   const description = ytmText(header.description?.musicDescriptionShelfRenderer?.description)
   const sections = ytmSections(data)
   const shelf = sections.map(section => section.musicShelfRenderer || section.musicPlaylistShelfRenderer).find(Boolean)
-  const songs = ytmShelfSongs(shelf)
+  const cover = ytmThumbnail(header.thumbnail)
+  // An album's songs have no pictures of their own in its list: they are its cover.
+  const songs = ytmShelfSongs(shelf).map(song => (song.picture || !album || !cover ? song : { ...song, picture: cover }))
   // An album plays as its own playlist, which its address names, or its canonical one does; a playlist as itself.
   const canonical = data.microformat?.microformatDataRenderer?.urlCanonical
   const list = new URL(canonical || location.href, location.href).searchParams.get('list')
     || shelf?.playlistId || (params.browseId?.startsWith('VL') ? params.browseId.slice(2) : null)
   const url = album ? `${YTM}/browse/${params.browseId}` : `${YTM}/playlist?list=${list}`
   const taken = new Set([url, ...authors.map(author => author.url), ...songs.map(song => song.url)].filter(Boolean))
-  const others = ytmEntryUrls(sections.filter(section => !section.musicShelfRenderer && !section.musicPlaylistShelfRenderer))
   const year = subtitle.find(part => /^(?:1[89]|20)\d\d$/.test(part))
   const parsed = articleOf({
     title,
     authors,
-    content: [...ytmPlaylistBlock(list, ytmThumbnail(header.thumbnail), songs[0]?.url), ...ytmParagraphs(description), ...songs.map(ytmSongBlock)],
+    content: [...ytmPlaylistBlock(list, cover, songs[0]?.url), ...ytmParagraphs(description), ...songs.map(ytmSongBlock)],
     links: [
-      ...songs.map(song => ({ url: song.url, title: song.title, score: 0.5 })),
-      ...ytmRanked(others, 0.3, taken),
+      ...songs.map(song => ytmLink(song, 0.5)),
+      ...ytmLinks(sections.filter(section => !section.musicShelfRenderer && !section.musicPlaylistShelfRenderer), 0.3, taken),
     ],
   })
   return {
@@ -448,7 +435,6 @@ function ytmArtist(entry) {
   const description = ytmText(about?.description) || ytmText(header?.description)
   const url = `${YTM}/channel/${params.browseId}`
   const taken = new Set([url, ...songs.map(song => song.url)])
-  const others = ytmEntryUrls(sections.filter(section => !section.musicShelfRenderer))
   const picture = ytmThumbnail(header?.thumbnail)
   return {
     title: ytmText(header?.title),
@@ -458,8 +444,8 @@ function ytmArtist(entry) {
       ...(description ? ['## About', ...ytmParagraphs(description)] : []),
     ],
     links: [
-      ...songs.map(song => ({ url: song.url, title: song.title, score: 0.5 })),
-      ...ytmRanked(others, 0.3, taken),
+      ...songs.map(song => ytmLink(song, 0.5)),
+      ...ytmLinks(sections.filter(section => !section.musicShelfRenderer), 0.3, taken),
     ],
     canonicalUrl: url,
     details: [
@@ -478,10 +464,66 @@ function ytmPageType(entry) {
   }
 }
 
+// What YouTube Music calls a kind of entry, first in what it says of one ("Album • Boss").
+const YTM_KINDS = /^(?:Song|Video|Album|Single|EP|Playlist|Auto playlist|Artist|Profile|Podcast|Episode|Audiobook|Station)$/
+
+// What the page says of an entry under or beside its title, its runs' parts between bullets ("Album • Boss",
+// "Song • Daft Punk & Julian Casablancas • 5:38 • 1.2B plays"), as details: its kind, who it is by (each artist with
+// their page where the page links them, else the names as written: a mix's "Mystikal, The Game, Pearl Jam"), its album,
+// year, length, songs, plays, views, audience (an artist's monthly listeners or subscribers) and age ("5d ago"), as
+// [name, value] pairs.
+function ytmDetails(runs) {
+  const parts = [[]]
+  for (const run of runs) {
+    // A run may hold bullets of its own ("Artist • 65.4M monthly audience").
+    run.text.split(/\s*•\s*/).forEach((text, i) => {
+      if (i) {
+        parts.push([])
+      }
+      if (text) {
+        parts.at(-1).push({ ...run, text })
+      }
+    })
+  }
+  const found = {}
+  for (const part of parts) {
+    const text = part.map(run => run.text).join('').trim()
+    const urls = part.map(run => ytmEndpointUrl(run.navigationEndpoint))
+    const albumAt = urls.findIndex(url => url?.includes('/browse/MPREb'))
+    if (!text) {
+      continue
+    }
+    if (albumAt >= 0) {
+      found.album = { text: part[albumAt].text, url: urls[albumAt] }
+    } else if (urls.some(url => url?.includes('/channel/'))) {
+      found.by = ytmArtists(part).map(artist => (artist.url ? { text: artist.name, url: artist.url } : artist.name))
+    } else if (YTM_KINDS.test(text)) {
+      found.kind = text
+    } else if (/\bplays$/.test(text)) {
+      found.plays = ytmNumber(text)
+    } else if (/\bviews$/.test(text)) {
+      found.views = ytmNumber(text)
+    } else if (/\b(?:monthly audience|subscribers)$/.test(text)) {
+      found.audience = ytmNumber(text)
+    } else if (/^\d+(?::\d\d)+$/.test(text)) {
+      found.length = text
+    } else if (/^(?:1[89]|20)\d\d$/.test(text)) {
+      found.year = Number(text)
+    } else if (/\b(?:songs?|tracks?|episodes?)$/.test(text)) {
+      found.songs = ytmNumber(text)
+    } else if (/\bago$/.test(text)) {
+      found.age = text
+    } else if (!found.by) {
+      found.by = [text]
+    }
+  }
+  return ['kind', 'by', 'album', 'year', 'length', 'songs', 'plays', 'views', 'audience', 'age']
+    .filter(name => found[name] != null).map(name => [name, found[name]])
+}
+
 // What an entry of a list or a shelf is (a song, an album, an artist, a playlist, a search's top result): { url,
-// title, subtitle }, its subtitle what the page says under or beside its title ("Album • Boss",
-// "Mariah Carey • 2.4B plays • Merry Christmas"); null for one leading to no page of its own (a mood's button), and
-// undefined for anything that is no entry.
+// title, picture, details } (see ytmPicture, ytmDetails), read from what the page says under or beside its title;
+// null for one leading to no page of its own (a mood's button), and undefined for anything that is no entry.
 function ytmEntry(kind, node) {
   if (!['musicResponsiveListItemRenderer', 'musicTwoRowItemRenderer', 'musicCardShelfRenderer', 'musicMultiRowListItemRenderer'].includes(kind)) {
     return undefined
@@ -495,8 +537,9 @@ function ytmEntry(kind, node) {
     return null
   }
   const fixed = (node.fixedColumns || []).map(column => column.musicResponsiveListItemFixedColumnRenderer?.text)
-  const subtitle = node.subtitle ? ytmText(node.subtitle) : [...columns.slice(1), ...fixed].map(ytmText).filter(Boolean).join(' • ')
-  return { url, title, subtitle: subtitle.trim() }
+  const said = node.subtitle ? [node.subtitle] : [...columns.slice(1), ...fixed]
+  const runs = said.filter(text => ytmText(text).trim()).flatMap((text, i) => [...(i ? [{ text: ' • ' }] : []), ...(text.runs || [{ text: ytmText(text) }])])
+  return { url, title, picture: ytmPicture(node.thumbnailRenderer || node.thumbnail), details: ytmDetails(runs) }
 }
 
 // The title of a shelf: its header's ("Listen again", "Song mixes"), or its own; a search's top result, whose own
@@ -573,7 +616,7 @@ function ytmGuidePlaylists(guide) {
     const entry = node.guideEntryRenderer
     const url = entry && ytmEndpointUrl(entry.navigationEndpoint)
     if (url?.includes('/playlist?')) {
-      entries.push({ url, title: ytmText(entry.formattedTitle).trim(), subtitle: '' })
+      entries.push({ url, title: ytmText(entry.formattedTitle).trim(), details: [['kind', 'Playlist']] })
       return
     }
     Object.values(node).forEach(visit)
@@ -591,10 +634,11 @@ function ytmContinuation(tree) {
 const YTM_MORE_PARTS = 3
 
 // A page listing songs, albums, artists and playlists (a search, the home page, explore, a mood's, a user's, a
-// podcast's) reads as its shelves, each headed by its title ("## Song mixes"), a line per entry linking to its page
-// with what the page says of it ("- [Born Gangstaz](…) · Album • Boss"). It is a listing, linking to each entry by its
-// place. The home page holds its first few shelves, and its later ones are asked for as the page would as it is
-// scrolled (at most YTM_MORE_PARTS more parts); the playlists the sidebar lists (the user's own) follow them.
+// podcast's) has no content of its own: it is a listing, linking to each entry it shows by its place, shelf by shelf,
+// with the entry's title, picture and what the page says of it (see ytmLink), so that its screen lists them. The home
+// page holds its first few shelves, and its later ones are asked for as the page would as it is scrolled (at most
+// YTM_MORE_PARTS more parts); the playlists the sidebar lists (the user's own) follow them. A search is named for what
+// it searches.
 async function ytmListing(entry, guide) {
   const seen = new Set([new URL(performance.getEntriesByType?.('navigation')?.[0]?.name || location.href).href.split('#')[0]])
   const sections = entry.data.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer
@@ -612,13 +656,14 @@ async function ytmListing(entry, guide) {
   if (entry.params?.browseId === 'FEmusic_home') {
     shelves.push(...ytmGuidePlaylists(guide).map(shelf => ({ ...shelf, entries: shelf.entries.filter(item => !seen.has(item.url)) })))
   }
-  const named = text => text.replace(/\[/g, '(').replace(/\]/g, ')')
-  const content = shelves.filter(shelf => shelf.entries.length).flatMap(shelf => [
-    ...(shelf.title ? [`## ${shelf.title}`] : []),
-    ...shelf.entries.map(item => `- [${named(item.title)}](${item.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})${item.subtitle ? ` · ${item.subtitle}` : ''}`),
-  ])
-  const urls = shelves.flatMap(shelf => shelf.entries.map(item => item.url))
-  return { ...(listingOf(urls) ?? { listing: true }), ...(content.length ? { content } : {}) }
+  const entries = shelves.flatMap(shelf => shelf.entries)
+  const query = entry.path === '/search' ? entry.params?.query : null
+  return {
+    listing: true,
+    ...(query ? { title: `${query} - YouTube Music` } : {}),
+    content: [],
+    links: entries.map((item, rank) => ytmLink(item, 1 / (1 + rank / 10))),
+  }
 }
 
 // What a page of YouTube Music shows (see each kind's own function). A search (/search?q=…), the home page and any

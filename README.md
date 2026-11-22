@@ -50,10 +50,13 @@ kind of list, YouTube Music's own mixes too).
   weight 0.5 to each top song and with `0.3 / (1 + rank / 10)` to the albums, singles, videos, playlists and artists
   the page shows.
 - A **search** (`/search?q=…`), the home page and any other page (explore, a mood, a user's or a podcast's page) is a
-  listing, read as its shelves in page order, each under its title (`## Song mixes`; a search's `## Top result`, then
-  `## More results`), a line per entry linking to its page with what the page says of it
-  (`- [Born Gangstaz](…/browse/MPREb_…) · Album • Boss`). It links to each entry by its place. The home page is served
-  with its first few shelves and loads the rest as it is scrolled, so the parser asks for up to 3 more parts as the page
-  would (`/youtubei/v1/browse?ctoken=…&type=next`, with the page's own `INNERTUBE_CONTEXT`, its visitor among it, without
+  listing with no content of its own (`content: []`, so YouTube Music's sidebar is not taken for it): Localnet shows it
+  as its links. It links to each entry it shows, shelf by shelf in page order (a search's top result first), by its
+  place, each link with the entry's title, its picture (a cover or a frame, asked for at 544 pixels where YouTube Music
+  serves a small one) and what the page says of it, as details: its kind, who it is by (each artist with their page
+  where it is linked), its album, year, length, songs, plays, views, audience and age. The home page is served with its
+  first few shelves and loads the rest as it is scrolled, so the parser asks for up to 3 more parts as the page would
+  (`/youtubei/v1/browse?ctoken=…&type=next`, with the page's own `INNERTUBE_CONTEXT`, its visitor among it, without
   which YouTube Music answers with the home page again); the playlists the sidebar lists (the user's own when signed
-  in) follow, under `## Your playlists`.
+  in) follow. A search is titled `<term> - YouTube Music`. Links from songs, albums, playlists and artists to what they
+  show carry the same, an album's songs its cover.
