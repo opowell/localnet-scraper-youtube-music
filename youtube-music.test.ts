@@ -140,7 +140,7 @@ describe('youtube music', () => {
     expect(parsed.title).toBe('Random Access Memories')
   })
 
-  it('reads a playlist with its owner, views and songs, played as its own list', async () => {
+  it('reads a playlist as a listing of its songs, with its owner, views and description as details', async () => {
     const { parseYouTubeMusic } = load('youtube-music.js', ['parseYouTubeMusic'])
     const list = 'PLt5IiqEadInpLjM3jcq_B0kjC4Mm0bL6N'
     visit(`${YTM}/playlist?list=${list}`, pageData('/browse', browseParams(`VL${list}`, 'MUSIC_PAGE_TYPE_PLAYLIST'), {
@@ -151,27 +151,33 @@ describe('youtube music', () => {
           subtitle: runs('Playlist', ' • ', '2020'),
           secondSubtitle: runs('6.5K views', ' • ', '36 tracks', ' • ', '2 hours, 39 minutes'),
           facepile: { avatarStackViewModel: { text: { content: 'Edson Mc' }, rendererContext: { commandContext: { onTap: { innertubeCommand: browse('UCy-Eud6kmbT08_kvksNhIDQ') } } } } },
+          description: { musicDescriptionShelfRenderer: { description: runs('A mix of songs that span all your tastes.') } },
         } }] } } } }],
         secondaryContents: { sectionListRenderer: { contents: [{ musicPlaylistShelfRenderer: { playlistId: list, contents: [
           songRow('HyHNuVaZJ-k', 'Feel Good Inc.', [runs(['Gorillaz', browse('UCNIV5B_aJnLrKDSnW_MOmcQ')]), runs(['Demon Days', browse('MPREb_demon')])], '4:15'),
+          songRow('5NV6Rdv1a3I', 'Get Lucky', [runs(['Daft Punk', browse(DAFT)]), runs(['Random Access Memories', browse(ALBUM)])], '6:10'),
         ] } }] } },
       } },
       microformat: { microformatDataRenderer: { urlCanonical: `${YTM}/playlist?list=${list}` } },
     }))
     const parsed = await parseYouTubeMusic()
-    expect(parsed.content).toEqual([
-      `<post author="Edson Mc" author-url="${YTM}/channel/UCy-Eud6kmbT08_kvksNhIDQ">`,
-      `[![](https://yt3.ggpht.com/cover=s1200)](https://www.youtube.com/watch?v=HyHNuVaZJ-k&list=${list})`,
-      '1. Feel Good Inc. · Gorillaz · Demon Days · 4:15',
+    // No content of its own: Localnet shows it as its links, the songs in the playlist's order.
+    expect(parsed.listing).toBe(true)
+    expect(parsed.title).toBe('Gorillaz, daft punk, capital cities etc')
+    expect(parsed.content).toEqual([])
+    expect(parsed.links.map(link => [link.url, link.title, link.score])).toEqual([
+      [`${YTM}/watch?v=HyHNuVaZJ-k`, 'Feel Good Inc.', 1],
+      [`${YTM}/watch?v=5NV6Rdv1a3I`, 'Get Lucky', 1 / 1.1],
     ])
     expect(parsed.canonicalUrl).toBe(`${YTM}/playlist?list=${list}`)
-    expect(Object.fromEntries(parsed.details)).toMatchObject({
-      owner: { text: 'Edson Mc', url: `${YTM}/channel/UCy-Eud6kmbT08_kvksNhIDQ` },
-      year: 2020,
-      songs: 36,
-      length: '2 hours, 39 minutes',
-      views: 6500,
-    })
+    expect(parsed.details).toEqual([
+      ['owner', { text: 'Edson Mc', url: `${YTM}/channel/UCy-Eud6kmbT08_kvksNhIDQ` }],
+      ['year', 2020],
+      ['songs', 36],
+      ['length', '2 hours, 39 minutes'],
+      ['views', 6500],
+      ['description', 'A mix of songs that span all your tastes.'],
+    ])
   })
 
   it('reads an artist as their top songs, to be played, and what the page says of them', async () => {

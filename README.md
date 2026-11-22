@@ -22,7 +22,7 @@ from the script's text, as the scraper runs without the page's variables. A song
 YouTube Music's API for it once loaded, and so does the parser, as the page would (with the user's session, as its
 `WEB_REMIX` client of the page's `INNERTUBE_CLIENT_VERSION`). Pages are told apart by their data, not their address.
 
-Everything a song, album, playlist or artist reads as can be listened to in Read: its first block is YouTube's player
+Everything a song, album or artist reads as can be listened to in Read: its first block is YouTube's player
 (Read plays a YouTube watch page in `youtube-nocookie.com`'s embed), playing the song, or the whole list one song after
 another (`https://www.youtube.com/watch?v=<first song>&list=<list>`, which YouTube's player plays through for every
 kind of list, YouTube Music's own mixes too).
@@ -41,9 +41,11 @@ kind of list, YouTube Music's own mixes too).
   artists. Its details are its kind (`Album`, `Single`, `EP`), artists, year, songs and length. It links with weight 1
   to its artists, 0.5 to each song, and `0.3 / (1 + rank / 10)` to the albums the page shows under it (its other
   versions, more by its artist).
-- A **playlist** (`/playlist?list=…`) reads as an album does, headed by its owner (YouTube Music for its own), played
-  as itself. Its details are its owner, year, songs, length and views; it links with weight 1 to its owner's page and
-  0.5 to each song. Only the songs the page is served with are read; those a long playlist loads as it is scrolled are not.
+- A **playlist** (`/playlist?list=…`, a mix too) is a listing with no content of its own (`content: []`): Localnet shows
+  it as its links, each song by its place in it (`1 / (1 + rank / 10)`, with its title, picture and details), then the
+  playlists the page shows under it. What it says of itself is in its details, which Localnet lists in the item's panel:
+  its owner (with their page), year, songs, length, views and description. Only the songs the page is served with are
+  read; those a long playlist loads as it is scrolled are not.
 - An **artist** (`/channel/UC…`) reads as their name, their top songs in YouTube's player (the list **Show all**
   opens), their picture shown until it plays, a block per top song (with its album and plays) under `## Top songs`,
   and what the page says about them under `## About`. Their details are their subscribers and views. They link with

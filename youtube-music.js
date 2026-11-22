@@ -362,12 +362,14 @@ function ytmSections(data) {
   return tabs[0]?.tabRenderer?.content?.sectionListRenderer?.contents || []
 }
 
-// An album (/browse/MPREb_…, also shown at /playlist?list=OLAK5uy_…) or a playlist (/playlist?list=…) reads as its
-// title, the whole of it, played in YouTube's player from its first song to its last (its playlist on
-// www.youtube.com), its description and a block per song, headed by its artists or owner. Its details are its kind
-// (Album, Single, EP; a playlist none), artists or owner, year, songs, length and, for a playlist, views. It links with
-// weight 1 to its artists' or owner's pages, with 0.5 to each song, and with 0.3 / (1 + rank / 10) to the albums and
-// playlists the page shows under it (an album's other versions, more by its artist).
+// An album (/browse/MPREb_…, also shown at /playlist?list=OLAK5uy_…) reads as its title, the whole of it, played in
+// YouTube's player from its first song to its last (its playlist on www.youtube.com), its description and a block per
+// song, headed by its artists. Its details are its kind (Album, Single, EP), artists, year, songs and length. It links
+// with weight 1 to its artists' pages, with 0.5 to each song, and with 0.3 / (1 + rank / 10) to the albums the page
+// shows under it (its other versions, more by its artist).
+// A playlist (/playlist?list=…, a mix too) is a listing with no content of its own: Localnet shows it as its links,
+// each song by its place (1 / (1 + rank / 10)), then the playlists the page shows under it. What it says of itself is
+// in its details: its owner (with their page), year, songs, length, views and description.
 function ytmCollection(entry, album) {
   const { data, params } = entry
   const header = ytmHeader(data)
@@ -395,26 +397,45 @@ function ytmCollection(entry, album) {
   const url = album ? `${YTM}/browse/${params.browseId}` : `${YTM}/playlist?list=${list}`
   const taken = new Set([url, ...authors.map(author => author.url), ...songs.map(song => song.url)].filter(Boolean))
   const year = subtitle.find(part => /^(?:1[89]|20)\d\d$/.test(part))
+  const songCount = ytmNumber(counts.find(part => /\b(?:songs?|tracks?)$/.test(part)))
+  const length = counts.find(part => /\b(?:minutes?|hours?|seconds?)$/.test(part)) || null
+  const others = sections.filter(section => !section.musicShelfRenderer && !section.musicPlaylistShelfRenderer)
+  if (!album) {
+    const entries = [...songs, ...ytmShelves(others, taken).flatMap(shelf => shelf.entries)]
+    return {
+      listing: true,
+      title,
+      content: [],
+      links: entries.map((item, rank) => ytmLink(item, 1 / (1 + rank / 10))),
+      canonicalUrl: url,
+      details: [
+        ['owner', authors[0] ? { text: authors[0].name, url: authors[0].url } : null],
+        ['year', year ? Number(year) : null],
+        ['songs', songCount],
+        ['length', length],
+        ['views', ytmNumber(counts.find(part => /\bviews?$/.test(part)))],
+        ['description', description || null],
+      ],
+    }
+  }
   const parsed = articleOf({
     title,
     authors,
     content: [...ytmPlaylistBlock(list, cover, songs[0]?.url), ...ytmParagraphs(description), ...songs.map(ytmSongBlock)],
     links: [
       ...songs.map(song => ytmLink(song, 0.5)),
-      ...ytmLinks(sections.filter(section => !section.musicShelfRenderer && !section.musicPlaylistShelfRenderer), 0.3, taken),
+      ...ytmLinks(others, 0.3, taken),
     ],
   })
   return {
     ...parsed,
     canonicalUrl: url,
     details: [
-      ['kind', album ? subtitle[0] || null : null],
-      ['artists', album ? authors.map(author => ({ text: author.name, url: author.url })) : null],
-      ['owner', !album && authors[0] ? { text: authors[0].name, url: authors[0].url } : null],
+      ['kind', subtitle[0] || null],
+      ['artists', authors.map(author => ({ text: author.name, url: author.url }))],
       ['year', year ? Number(year) : null],
-      ['songs', ytmNumber(counts.find(part => /\b(?:songs?|tracks?)$/.test(part)))],
-      ['length', counts.find(part => /\b(?:minutes?|hours?|seconds?)$/.test(part)) || null],
-      ['views', album ? null : ytmNumber(counts.find(part => /\bviews?$/.test(part)))],
+      ['songs', songCount],
+      ['length', length],
     ],
   }
 }
