@@ -18,9 +18,11 @@ so these pages go to this scraper rather than to YouTube's (`youtube.com`).
 
 YouTube Music draws every page with its scripts, from data rather than markup: a page is served with its data written
 into a script (`initialData.push({ path, params, data })`, its strings escaped as `\x7b\x22…`), which the parser reads
-from the script's text, as the scraper runs without the page's variables. A song's page holds none of it: the page asks
-YouTube Music's API for it once loaded, and so does the parser, as the page would (with the user's session, as its
-`WEB_REMIX` client of the page's `INNERTUBE_CLIENT_VERSION`). Pages are told apart by their data, not their address.
+from the script's text. A song's page holds none of it: the page asks YouTube Music's API for it once loaded, and so
+does the parser, as the page would (with the user's session, as its `WEB_REMIX` client of the page's
+`INNERTUBE_CLIENT_VERSION`). The scraper runs in the page's own world (`// @world main`) so that it asks from the
+page's origin: YouTube Music refuses (403) a call to its API from any other, and a user script's own requests need not
+be the page's. Pages are told apart by their data, not their address.
 
 Everything a song, album or artist reads as can be listened to in Read: its first block is YouTube's player
 (Read plays a YouTube watch page in `youtube-nocookie.com`'s embed), playing the song, or the whole list one song after
@@ -34,7 +36,10 @@ kind of list, YouTube Music's own mixes too).
   length, cover), then `/youtubei/v1/browse` of its Lyrics tab and Related tab. Its details are its artists, album,
   year and length. It links with weight 1 to its artists and album, and with `0.3 / (1 + rank / 10)` to the songs,
   albums, playlists and artists its Related tab shows. Its address is `/watch?v=<id>` (`canonicalUrl`), whatever list
-  or start time it was opened with. If the song cannot be had, the page is left to its text.
+  or start time it was opened with. If the API tells nothing of it, the song is read from the page's player bar once
+  the page shows it there (its title, artists and album as the byline links them, year, length and cover); if the page
+  shows none within 10 seconds, it is still the song in YouTube's player, untitled, and the scrape counts as failed
+  (`failed`), never the page's menus as its text.
 - An **album** (`/browse/MPREb_…`, also shown at `/playlist?list=OLAK5uy_…`, which is an alias of it) reads as its
   title, the whole album in YouTube's player (its own list, `OLAK5uy_…`), its description, and a block per song
   (`"5. Instant Crush (feat. Julian Casablancas) · Daft Punk & Julian Casablancas · 5:38 · 1.2B plays"`), headed by its

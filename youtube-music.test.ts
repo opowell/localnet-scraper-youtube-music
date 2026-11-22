@@ -365,15 +365,52 @@ describe('youtube music', () => {
       })
     })
 
-    it('still reads without lyrics or related songs, and is left to the page\'s text when the song cannot be had', async () => {
+    it('still reads without lyrics or related songs', async () => {
       vi.stubGlobal('fetch', async (url: string) => ({ ok: url.includes('/next'), json: async () => next }))
       const { parseYouTubeMusic } = load('youtube-music.js', ['parseYouTubeMusic'])
       visit(`${YTM}/watch?v=khnokW3Mw24`, '')
       const parsed = await parseYouTubeMusic()
       expect(parsed.content.slice(1)).toEqual(['[![](https://yt3.googleusercontent.com/ram=w544)](https://www.youtube.com/watch?v=khnokW3Mw24)', 'From Random Access Memories (2013)'])
+    })
 
-      vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')))
-      expect(await parseYouTubeMusic()).toBeNull()
+    it('reads the song from the page\'s player bar when YouTube Music refuses the parser\'s asking, and is still the song, played, when the page shows none', async () => {
+      vi.stubGlobal('fetch', async () => ({ ok: false, status: 403 }))
+      const { parseYouTubeMusic } = load('youtube-music.js', ['parseYouTubeMusic'])
+      visit(`${YTM}/watch?v=khnokW3Mw24`, `<ytmusic-player-bar>
+        <img class="image" src="https://lh3.googleusercontent.com/cover=w60-h60">
+        <div class="title">Instant Crush</div>
+        <span class="byline"><a href="channel/${DAFT}">Daft Punk</a><span> • </span><a href="browse/${ALBUM}">Random Access Memories</a><span> • </span><span>2013</span></span>
+        <span class="time-info">0:12 / 5:38</span>
+      </ytmusic-player-bar>`)
+      const parsed = await parseYouTubeMusic()
+      expect(parsed.title).toBe('Instant Crush')
+      expect(parsed.content.slice(1)).toEqual([
+        '[![](https://lh3.googleusercontent.com/cover=w60-h60)](https://www.youtube.com/watch?v=khnokW3Mw24)',
+        'From Random Access Memories (2013)',
+      ])
+      expect(Object.fromEntries(parsed.details)).toEqual({
+        artists: [{ text: 'Daft Punk', url: `${YTM}/channel/${DAFT}` }],
+        album: { text: 'Random Access Memories', url: `${YTM}/browse/${ALBUM}` },
+        year: 2013,
+        length: '5:38',
+      })
+      expect(parsed.failed).toBeUndefined()
+
+      vi.useFakeTimers()
+      try {
+        visit(`${YTM}/watch?v=khnokW3Mw24`, '<ytmusic-player-bar></ytmusic-player-bar>')
+        const parsing = parseYouTubeMusic()
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(await parsing).toEqual({
+          untitled: true,
+          content: ['[![]()](https://www.youtube.com/watch?v=khnokW3Mw24)'],
+          links: [],
+          canonicalUrl: `${YTM}/watch?v=khnokW3Mw24`,
+          failed: 'YouTube Music told nothing of this song',
+        })
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

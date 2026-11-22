@@ -1,3 +1,8 @@
+// @world main
+// The parser runs in the page's own world, so that it asks YouTube Music's API for a song as the page itself does: from
+// the page's origin, with the user's session. A user script's own requests need not be the page's, and YouTube Music
+// refuses (403) a call to its API from any other origin.
+
 // YouTube Music (music.youtube.com) draws every page with its scripts from data, never from markup it serves: a page's
 // data is written into it as it is served (initialData.push({ path, params, data }), see ytmPageData), but for a
 // song's (/watch?v=…), which the page asks YouTube for once loaded, as the parser does too (see ytmApi). Songs, albums,
@@ -264,6 +269,31 @@ function ytmPlaylistBlock(list, cover, first) {
   return [videoBlock(src, cover || '')]
 }
 
+// The song as the page shows it in its player bar once it has asked for it itself, for when the parser's own asking
+// finds nothing: as an entry of the queue would give it, its title, its byline (artists and album linked to their
+// pages: "Daft Punk • Random Access Memories • 2013"), length and cover. null if the page shows no song in 10 s.
+async function ytmPlayerBarSong() {
+  const bar = () => document.querySelector('ytmusic-player-bar')
+  await waitFor(() => bar()?.querySelector('.title')?.textContent.trim(), 10000)
+  const title = bar()?.querySelector('.title')?.textContent.trim()
+  if (!title) {
+    return null
+  }
+  const byline = bar().querySelector('.byline')
+  const runs = Array.from(byline?.childNodes || [], (node) => {
+    const id = /(?:^|\/)(?:channel|browse)\/([\w-]+)/.exec(node.getAttribute?.('href') || '')?.[1]
+    return { text: node.textContent, ...(id ? { navigationEndpoint: { browseEndpoint: { browseId: id } } } : {}) }
+  }).filter(run => run.text)
+  const length = /\/\s*([\d:]+)/.exec(bar().querySelector('.time-info')?.textContent || '')?.[1]
+  const cover = bar().querySelector('.image')?.getAttribute('src')
+  return {
+    title: { runs: [{ text: title }] },
+    longBylineText: { runs },
+    ...(length ? { lengthText: { runs: [{ text: length }] } } : {}),
+    ...(cover ? { thumbnail: { thumbnails: [{ url: cover }] } } : {}),
+  }
+}
+
 // A song (/watch?v=…) reads as its title, the song itself, played in YouTube's player (its watch page on
 // www.youtube.com, as Read plays YouTube's videos), the album it is from and its lyrics, headed by its artists. The
 // page holds none of it, so it is asked for as the page asks for it once loaded (next, then the lyrics' and related
@@ -284,15 +314,19 @@ async function ytmTrack(id, list) {
     Object.values(node).forEach(findSong)
   }
   findSong(watch)
+  song = song || await ytmPlayerBarSong()
+  const url = `${YTM}/watch?v=${id}`
+  const player = videoBlock(`https://www.youtube.com/watch?v=${id}`, ytmThumbnail(song) || '')
   if (!song) {
-    return null
+    // Still the song, played, rather than the page's menus as its text.
+    return { untitled: true, content: [player], links: [], canonicalUrl: url, failed: 'YouTube Music told nothing of this song' }
   }
   const byline = song.longBylineText?.runs || []
   const artists = ytmArtists(byline)
   const albumRun = byline.find(run => /\/browse\/MPREb/.test(ytmEndpointUrl(run.navigationEndpoint) || ''))
   const album = albumRun ? { text: albumRun.text, url: ytmEndpointUrl(albumRun.navigationEndpoint) } : null
   const year = byline.map(run => run.text.trim()).find(text => /^(?:1[89]|20)\d\d$/.test(text))
-  const tab = pageType => watch.tabs?.map(t => t.tabRenderer?.endpoint?.browseEndpoint)
+  const tab = pageType => watch?.tabs?.map(t => t.tabRenderer?.endpoint?.browseEndpoint)
     .find(endpoint => endpoint?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType === pageType)?.browseId
   const [lyricsPage, relatedPage] = await Promise.all(['MUSIC_PAGE_TYPE_TRACK_LYRICS', 'MUSIC_PAGE_TYPE_TRACK_RELATED']
     .map(pageType => (tab(pageType) ? ytmApi('browse', { browseId: tab(pageType) }) : null)))
@@ -309,8 +343,7 @@ async function ytmTrack(id, list) {
   }
   findLyrics(lyricsPage?.contents)
 
-  const url = `${YTM}/watch?v=${id}`
-  const content = [videoBlock(`https://www.youtube.com/watch?v=${id}`, ytmThumbnail(song) || '')]
+  const content = [player]
   if (album) {
     content.push(`From ${album.text}${year ? ` (${year})` : ''}`)
   }
