@@ -17,12 +17,12 @@ function escaped(text: string) {
 }
 
 // The script YouTube Music serves a page's data in, after the sidebar's.
-function pageData(path: string, params: object, data: object) {
+function pageData(path: string, params: object, data: object, guide: object = { items: [] }, settings = '') {
   return `<script>try { const initialData = [];
-    initialData.push({path: '\\/guide', params: JSON.parse('\\x7b\\x7d'), data: '${escaped(JSON.stringify({ items: [] }))}'});
+    initialData.push({path: '\\/guide', params: JSON.parse('\\x7b\\x7d'), data: '${escaped(JSON.stringify(guide))}'});
     initialData.push({path: '${escaped(path)}', params: JSON.parse('${escaped(JSON.stringify(params))}'), data: '${escaped(JSON.stringify(data))}'});
     ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});} catch (e) {}</script>
-    <script>ytcfg.set({"INNERTUBE_CLIENT_VERSION":"1.20261117.06.00","HL":"en","GL":"US"});</script>`
+    <script>ytcfg.set({"INNERTUBE_CLIENT_VERSION":"1.20261117.06.00","HL":"en","GL":"US"${settings}});</script>`
 }
 
 function browseParams(browseId: string, pageType: string) {
@@ -195,16 +195,16 @@ describe('youtube music', () => {
     expect(Object.fromEntries(parsed.details)).toEqual({ subscribers: 7220000, views: 6066806347 })
   })
 
-  it('reads a search as a listing of what it found, the top result first', async () => {
+  it('reads a search as a listing of what it found, the top result first, a line each, linking to it', async () => {
     const { parseYouTubeMusic } = load('youtube-music.js', ['parseYouTubeMusic'])
-    const item = (title: string, endpoint: object) => ({ musicResponsiveListItemRenderer: {
-      flexColumns: [{ musicResponsiveListItemFlexColumnRenderer: { text: runs(title) } }],
+    const item = (title: string, endpoint: object, subtitle?: string) => ({ musicResponsiveListItemRenderer: {
+      flexColumns: [runs(title), ...(subtitle ? [runs(subtitle)] : [])].map(text => ({ musicResponsiveListItemFlexColumnRenderer: { text } })),
       navigationEndpoint: endpoint,
     } })
     visit(`${YTM}/search?q=daft+punk`, pageData('/search', { query: 'daft punk' }, {
       contents: { tabbedSearchResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [
-        { musicCardShelfRenderer: { title: runs(['Daft Punk', browse(DAFT)]), contents: [songRow('khnokW3Mw24', 'Instant Crush', [])] } },
-        { itemSectionRenderer: { contents: [item('Random Access Memories', browse(ALBUM))] } },
+        { musicCardShelfRenderer: { title: runs(['Daft Punk', browse(DAFT)]), subtitle: runs('Artist • 65.4M monthly audience'), contents: [songRow('khnokW3Mw24', 'Instant Crush', [])] } },
+        { itemSectionRenderer: { contents: [item('Random Access Memories [Deluxe]', browse(ALBUM), 'Album • Daft Punk • 2013')] } },
         { itemSectionRenderer: { contents: [item('Presenting Daft Punk', browse('VLRDCLAK5uy_n20'))] } },
         // Pages that are not of their own (a song's credits) are passed over.
         { itemSectionRenderer: { contents: [item('Credits', browse('MPTCkhnokW3Mw24'))] } },
@@ -217,6 +217,68 @@ describe('youtube music', () => {
       `${YTM}/watch?v=khnokW3Mw24`,
       `${YTM}/browse/${ALBUM}`,
       `${YTM}/playlist?list=RDCLAK5uy_n20`,
+    ])
+    // A title's brackets would end its link, so they are written as parentheses.
+    expect(parsed.content).toEqual([
+      '## Top result',
+      `- [Daft Punk](${YTM}/channel/${DAFT}) · Artist • 65.4M monthly audience`,
+      `- [Instant Crush](${YTM}/watch?v=khnokW3Mw24) · 4:36`,
+      '## More results',
+      `- [Random Access Memories (Deluxe)](${YTM}/browse/${ALBUM}) · Album • Daft Punk • 2013`,
+      `- [Presenting Daft Punk](${YTM}/playlist?list=RDCLAK5uy_n20)`,
+    ])
+  })
+
+  it('reads the home page as its shelves, the later ones asked for as the page would, then the user\'s playlists', async () => {
+    const shelf = (title: string, cards: [string, object, string][], more?: string) => ({
+      ...carousel(title, cards.map(([name, endpoint]) => [name, endpoint])),
+      ...(more ? {} : {}),
+    })
+    const withSubtitles = (title: string, cards: [string, object, string][]) => {
+      const built = shelf(title, cards)
+      built.musicCarouselShelfRenderer.contents.forEach((card: any, i: number) => { card.musicTwoRowItemRenderer.subtitle = runs(cards[i][2]) })
+      return built
+    }
+    const fetch = vi.fn(async (_url: string, _init: { body: string }) => ({ ok: true, json: async () => ({
+      continuationContents: { sectionListContinuation: { contents: [withSubtitles('New releases', [['Discovery', browse('MPREb_7ltM34kr0mH'), 'Album • Daft Punk']])] } },
+    }) }))
+    vi.stubGlobal('fetch', fetch)
+    const { parseYouTubeMusic } = load('youtube-music.js', ['parseYouTubeMusic'])
+    const context = { client: { clientName: 'WEB_REMIX', clientVersion: '1.20261117.06.00', hl: 'de', gl: 'AT', visitorData: 'Cgt' } }
+    visit(`${YTM}/`, pageData('/browse', { browseId: 'FEmusic_home' }, {
+      contents: { singleColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: {
+        contents: [withSubtitles('Listen again', [['Liked Music', browse('VLLM'), 'Auto playlist'], ['Born Gangstaz', browse('MPREb_boss'), 'Album • Boss']])],
+        continuations: [{ nextContinuationData: { continuation: 'TOKEN=' } }],
+      } } } }] } },
+    }, { items: [{ guideSectionRenderer: { items: [
+      { guideEntryRenderer: { formattedTitle: runs('Home'), navigationEndpoint: browse('FEmusic_home') } },
+      { guideEntryRenderer: { formattedTitle: runs('Liked Music'), navigationEndpoint: browse('VLLM') } },
+      { guideEntryRenderer: { formattedTitle: runs('Chanukah'), navigationEndpoint: browse('VLPLchanukah') } },
+    ] } }] }, `,"INNERTUBE_CONTEXT":${JSON.stringify(context)}`))
+    const parsed = await parseYouTubeMusic()
+
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe(`${YTM}/youtubei/v1/browse?ctoken=TOKEN%3D&continuation=TOKEN%3D&type=next&prettyPrint=false`)
+    // With the page's own context, which its continuations need.
+    expect(JSON.parse(init.body)).toEqual({ context })
+    // One part more, as the answer names no further one.
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(parsed.listing).toBe(true)
+    expect(parsed.content).toEqual([
+      '## Listen again',
+      `- [Liked Music](${YTM}/playlist?list=LM) · Auto playlist`,
+      `- [Born Gangstaz](${YTM}/browse/MPREb_boss) · Album • Boss`,
+      '## New releases',
+      `- [Discovery](${YTM}/browse/MPREb_7ltM34kr0mH) · Album • Daft Punk`,
+      // The sidebar's playlists, but for one a shelf has shown already.
+      '## Your playlists',
+      `- [Chanukah](${YTM}/playlist?list=PLchanukah)`,
+    ])
+    expect(parsed.links.map((link: { url: string }) => link.url)).toEqual([
+      `${YTM}/playlist?list=LM`,
+      `${YTM}/browse/MPREb_boss`,
+      `${YTM}/browse/MPREb_7ltM34kr0mH`,
+      `${YTM}/playlist?list=PLchanukah`,
     ])
   })
 

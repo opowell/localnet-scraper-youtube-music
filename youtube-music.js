@@ -23,8 +23,9 @@ function ytmScripts() {
 }
 
 // The data YouTube Music writes into the page as it serves it, for its scripts to draw the page from: each
-// initialData.push({ path: '\/browse', params: JSON.parse('…'), data: '…' }), as { path, params, data }, but the
-// sidebar's (/guide). The scraper runs without the page's variables, so the data is read from the scripts' text.
+// initialData.push({ path: '\/browse', params: JSON.parse('…'), data: '…' }), as { path, params, data }, the
+// sidebar's (/guide) among them. The scraper runs without the page's variables, so the data is read from the scripts'
+// text.
 function ytmPageData() {
   const quoted = String.raw`'((?:[^'\\]|\\[\s\S])*)'`
   const push = new RegExp(String.raw`initialData\.push\(\{\s*path:\s*${quoted},\s*params:\s*JSON\.parse\(${quoted}\),\s*data:\s*${quoted}`, 'g')
@@ -36,7 +37,7 @@ function ytmPageData() {
       // Data that does not parse is passed over.
     }
   }
-  return found.filter(entry => entry.path !== '/guide')
+  return found
 }
 
 // A setting YouTube Music's page is configured with (ytcfg.set({ "INNERTUBE_CLIENT_VERSION": "1.2026…", … })), if
@@ -45,20 +46,58 @@ function ytmConfig(name) {
   return new RegExp(`"${name}":\\s*"([^"]*)"`).exec(ytmScripts())?.[1] || null
 }
 
+// The object the page's settings name (ytcfg.set({ "INNERTUBE_CONTEXT": { "client": { … } }, … })), read up to the
+// brace that closes it; null if they name none.
+function ytmConfigObject(name) {
+  const text = ytmScripts()
+  const at = new RegExp(`"${name}":\\s*\\{`).exec(text)
+  if (!at) {
+    return null
+  }
+  const start = at.index + at[0].length - 1
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]
+    if (inString) {
+      if (c === '\\') {
+        i++
+      } else if (c === '"') {
+        inString = false
+      }
+    } else if (c === '"') {
+      inString = true
+    } else if (c === '{') {
+      depth++
+    } else if (c === '}' && --depth === 0) {
+      try {
+        return JSON.parse(text.slice(start, i + 1))
+      } catch {
+        return null
+      }
+    }
+  }
+  return null
+}
+
 // What YouTube Music answers the page's own call to its API (/youtubei/v1/next, /youtubei/v1/browse), made as the
-// page would, with the user's session, as its web client (WEB_REMIX); null if it cannot be had.
-async function ytmApi(endpoint, body) {
-  const client = {
-    clientName: 'WEB_REMIX',
-    clientVersion: ytmConfig('INNERTUBE_CLIENT_VERSION') || '1.20261117.06.00',
-    ...(ytmConfig('HL') ? { hl: ytmConfig('HL') } : {}),
-    ...(ytmConfig('GL') ? { gl: ytmConfig('GL') } : {}),
+// page would, with the user's session and the page's own context (INNERTUBE_CONTEXT: its client, language, country
+// and visitor, which a continuation of the page's needs), else as its web client (WEB_REMIX); null if it cannot be
+// had. query is added to the address (a continuation's).
+async function ytmApi(endpoint, body, query = '') {
+  const context = ytmConfigObject('INNERTUBE_CONTEXT') || {
+    client: {
+      clientName: 'WEB_REMIX',
+      clientVersion: ytmConfig('INNERTUBE_CLIENT_VERSION') || '1.20261117.06.00',
+      ...(ytmConfig('HL') ? { hl: ytmConfig('HL') } : {}),
+      ...(ytmConfig('GL') ? { gl: ytmConfig('GL') } : {}),
+    },
   }
   try {
-    const response = await pageFetch(`${location.origin}/youtubei/v1/${endpoint}?prettyPrint=false`, {
+    const response = await pageFetch(`${location.origin}/youtubei/v1/${endpoint}?${query}prettyPrint=false`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ context: { client }, ...body }),
+      body: JSON.stringify({ context, ...body }),
     })
     return response.ok ? await response.json() : null
   } catch {
@@ -439,9 +478,152 @@ function ytmPageType(entry) {
   }
 }
 
+// What an entry of a list or a shelf is (a song, an album, an artist, a playlist, a search's top result): { url,
+// title, subtitle }, its subtitle what the page says under or beside its title ("Album • Boss",
+// "Mariah Carey • 2.4B plays • Merry Christmas"); null for one leading to no page of its own (a mood's button), and
+// undefined for anything that is no entry.
+function ytmEntry(kind, node) {
+  if (!['musicResponsiveListItemRenderer', 'musicTwoRowItemRenderer', 'musicCardShelfRenderer', 'musicMultiRowListItemRenderer'].includes(kind)) {
+    return undefined
+  }
+  const columns = (node.flexColumns || []).map(column => column.musicResponsiveListItemFlexColumnRenderer?.text)
+  const titleText = node.title || columns[0]
+  const url = ytmEndpointUrl(titleText?.runs?.[0]?.navigationEndpoint) || ytmEndpointUrl(node.navigationEndpoint)
+    || ytmEndpointUrl(node.onTap) || (node.playlistItemData?.videoId && `${YTM}/watch?v=${node.playlistItemData.videoId}`)
+  const title = ytmText(titleText).trim()
+  if (!url || !title) {
+    return null
+  }
+  const fixed = (node.fixedColumns || []).map(column => column.musicResponsiveListItemFixedColumnRenderer?.text)
+  const subtitle = node.subtitle ? ytmText(node.subtitle) : [...columns.slice(1), ...fixed].map(ytmText).filter(Boolean).join(' • ')
+  return { url, title, subtitle: subtitle.trim() }
+}
+
+// The title of a shelf: its header's ("Listen again", "Song mixes"), or its own; a search's top result, whose own
+// title is the result's, is "Top result" where its header names none.
+function ytmShelfTitle(kind, shelf) {
+  const header = shelf.header && Object.values(shelf.header)[0]
+  const title = ytmText(header?.title) || (kind === 'musicCardShelfRenderer' ? 'Top result' : ytmText(shelf.title))
+  return title.trim()
+}
+
+// The shelves a tree of data shows, in page order: [{ title, entries }], each entry once (see ytmEntry). Entries in no
+// shelf (a search's results, each in a section of its own) are gathered where they stand, in a shelf of their own,
+// "More results" after a shelf, else untitled. A search's top result is an entry with songs of its own under it.
+function ytmShelves(tree, seen = new Set()) {
+  const shelves = []
+  const add = (shelf, entry) => {
+    if (!entry || seen.has(entry.url)) {
+      return
+    }
+    seen.add(entry.url)
+    let into = shelf
+    if (!into) {
+      into = shelves.at(-1)?.loose ? shelves.at(-1) : { title: shelves.length ? 'More results' : '', entries: [], loose: true }
+      if (into !== shelves.at(-1)) {
+        shelves.push(into)
+      }
+    }
+    into.entries.push(entry)
+  }
+  const visit = (node, shelf) => {
+    if (Array.isArray(node)) {
+      node.forEach(item => visit(item, shelf))
+      return
+    }
+    if (!node || typeof node !== 'object') {
+      return
+    }
+    for (const [kind, value] of Object.entries(node)) {
+      if (!value || typeof value !== 'object') {
+        continue
+      }
+      if (/ShelfRenderer$|^gridRenderer$/.test(kind) && !Array.isArray(value)) {
+        const own = { title: ytmShelfTitle(kind, value), entries: [] }
+        shelves.push(own)
+        if (kind === 'musicCardShelfRenderer') {
+          add(own, ytmEntry(kind, value))
+        }
+        visit(value.contents || value.items, own)
+        continue
+      }
+      const entry = ytmEntry(kind, value)
+      if (entry !== undefined) {
+        add(shelf, entry)
+        continue
+      }
+      visit(value, shelf)
+    }
+  }
+  visit(tree)
+  return shelves.filter(shelf => shelf.entries.length)
+}
+
+// The playlists the sidebar lists (the user's own, Liked Music among them, when signed in), as a shelf.
+function ytmGuidePlaylists(guide) {
+  const entries = []
+  const visit = (node) => {
+    if (Array.isArray(node)) {
+      node.forEach(visit)
+      return
+    }
+    if (!node || typeof node !== 'object') {
+      return
+    }
+    const entry = node.guideEntryRenderer
+    const url = entry && ytmEndpointUrl(entry.navigationEndpoint)
+    if (url?.includes('/playlist?')) {
+      entries.push({ url, title: ytmText(entry.formattedTitle).trim(), subtitle: '' })
+      return
+    }
+    Object.values(node).forEach(visit)
+  }
+  visit(guide?.items)
+  return entries.filter(entry => entry.title).length ? [{ title: 'Your playlists', entries: entries.filter(entry => entry.title) }] : []
+}
+
+// The token for the next part of a page that loads more as it is scrolled (the home page's shelves), if it has one.
+function ytmContinuation(tree) {
+  return [tree?.continuations].flat().find(Boolean)?.nextContinuationData?.continuation || null
+}
+
+// How many more parts of a page to ask for, as the page would when scrolled, each holding a few shelves.
+const YTM_MORE_PARTS = 3
+
+// A page listing songs, albums, artists and playlists (a search, the home page, explore, a mood's, a user's, a
+// podcast's) reads as its shelves, each headed by its title ("## Song mixes"), a line per entry linking to its page
+// with what the page says of it ("- [Born Gangstaz](…) · Album • Boss"). It is a listing, linking to each entry by its
+// place. The home page holds its first few shelves, and its later ones are asked for as the page would as it is
+// scrolled (at most YTM_MORE_PARTS more parts); the playlists the sidebar lists (the user's own) follow them.
+async function ytmListing(entry, guide) {
+  const seen = new Set([new URL(performance.getEntriesByType?.('navigation')?.[0]?.name || location.href).href.split('#')[0]])
+  const sections = entry.data.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer
+  const shelves = ytmShelves(entry.data.contents, seen)
+  let token = ytmContinuation(sections)
+  for (let part = 0; token && part < YTM_MORE_PARTS; part++) {
+    const more = (await ytmApi('browse', {}, `ctoken=${encodeURIComponent(token)}&continuation=${encodeURIComponent(token)}&type=next&`))
+      ?.continuationContents?.sectionListContinuation
+    if (!more) {
+      break
+    }
+    shelves.push(...ytmShelves(more.contents, seen))
+    token = ytmContinuation(more)
+  }
+  if (entry.params?.browseId === 'FEmusic_home') {
+    shelves.push(...ytmGuidePlaylists(guide).map(shelf => ({ ...shelf, entries: shelf.entries.filter(item => !seen.has(item.url)) })))
+  }
+  const named = text => text.replace(/\[/g, '(').replace(/\]/g, ')')
+  const content = shelves.filter(shelf => shelf.entries.length).flatMap(shelf => [
+    ...(shelf.title ? [`## ${shelf.title}`] : []),
+    ...shelf.entries.map(item => `- [${named(item.title)}](${item.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})${item.subtitle ? ` · ${item.subtitle}` : ''}`),
+  ])
+  const urls = shelves.flatMap(shelf => shelf.entries.map(item => item.url))
+  return { ...(listingOf(urls) ?? { listing: true }), ...(content.length ? { content } : {}) }
+}
+
 // What a page of YouTube Music shows (see each kind's own function). A search (/search?q=…), the home page and any
 // other page (an explore page, a mood's, a user's, a podcast's) is a listing of the songs, albums, artists and
-// playlists it shows, the top result first.
+// playlists it shows, shelf by shelf, the top result first (see ytmListing).
 async function parseYouTubeMusic(_profileId) {
   if (location.hostname !== 'music.youtube.com') {
     return null
@@ -452,7 +634,8 @@ async function parseYouTubeMusic(_profileId) {
   if (id) {
     return ytmTrack(id, asked.searchParams.get('list'))
   }
-  const entry = ytmPageData()[0]
+  const data = ytmPageData()
+  const entry = data.find(found => found.path !== '/guide')
   if (!entry) {
     return null
   }
@@ -466,8 +649,7 @@ async function parseYouTubeMusic(_profileId) {
   if (pageType === 'MUSIC_PAGE_TYPE_ARTIST') {
     return ytmArtist(entry)
   }
-  const here = asked.href.split('#')[0]
-  return listingOf(ytmEntryUrls(entry.data.contents).filter(url => url !== here)) ?? { listing: true }
+  return ytmListing(entry, data.find(found => found.path === '/guide')?.data)
 }
 
 // The parser a scrape calls.

@@ -23,10 +23,13 @@ function servedPage(path: string, params: object, data: object) {
 test.describe('youtube music', () => {
   test('the home page, at its bare address, is read by this scraper, not YouTube\'s, as a listing of what it shows', async ({ app, site }) => {
     site.serve(`${YTM}/`, servedPage('/browse', { browseId: 'FEmusic_home' }, {
-      contents: { singleColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicCarouselShelfRenderer: { contents: [
-        { musicTwoRowItemRenderer: { title: runs(['Random Access Memories', { browseEndpoint: { browseId: 'MPREb_K8qWMWVqXGi' } }]) } },
-        { musicTwoRowItemRenderer: { title: runs(['Instant Crush', { watchEndpoint: { videoId: 'khnokW3Mw24' } }]) } },
-      ] } }] } } } }] } },
+      contents: { singleColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicCarouselShelfRenderer: {
+        header: { musicCarouselShelfBasicHeaderRenderer: { title: runs('Listen again') } },
+        contents: [
+          { musicTwoRowItemRenderer: { title: runs(['Random Access Memories', { browseEndpoint: { browseId: 'MPREb_K8qWMWVqXGi' } }]), subtitle: runs('Album • Daft Punk') } },
+          { musicTwoRowItemRenderer: { title: runs(['Instant Crush', { watchEndpoint: { videoId: 'khnokW3Mw24' } }]), subtitle: runs('Song • Daft Punk') } },
+        ],
+      } }] } } } }] } },
     }))
     await app.scrape(YTM)
     const item = await app.get('items', YTM)
@@ -35,6 +38,15 @@ test.describe('youtube music', () => {
     expect(logs.map((entry: any) => entry.message).join('\n')).toContain('(via YouTube Music)')
     const links = (await app.all('links')).filter((link: any) => link.originKey === YTM).map((link: any) => link.destinationKey)
     expect(links.sort()).toEqual([ALBUM, SONG])
+
+    // Read shows its shelves, each entry a link to its page, not the page's text (its sidebar).
+    await app.go(`#/?q=${encodeURIComponent(`item="${YTM}"`)}&v=record`)
+    await expect(app.page.locator('.reader .reader-heading')).toHaveText(['Listen again'])
+    await expect(app.page.locator('.reader a', { hasText: 'Random Access Memories' })).toHaveAttribute('href', /MPREb_K8qWMWVqXGi/)
+    await expect(app.page.locator('.reader')).toContainText('Instant Crush · Song • Daft Punk')
+    if (process.env.SHOT) {
+      await app.page.screenshot({ path: process.env.SHOT })
+    }
   })
 
   test('a song is read from what the page asks YouTube Music for, and Read plays it in YouTube\'s player, its lyrics under it', async ({ app, site }) => {
@@ -101,9 +113,6 @@ test.describe('youtube music', () => {
 
     await app.go(`#/?q=${encodeURIComponent(`item="${ALBUM}"`)}&v=record`)
     await expect(app.page.locator('.reader iframe.reader-youtube')).toHaveAttribute('src', embed)
-    if (process.env.SHOT) {
-      await app.page.screenshot({ path: process.env.SHOT })
-    }
     // Its songs, a numbered list.
     const songs = app.page.locator('.reader .reader-item')
     await expect(songs).toHaveText(['Give Life Back to Music · Daft Punk · 4:36', 'The Game of Love · Daft Punk · 4:36'])
